@@ -1,4 +1,4 @@
-package blockdev
+package blockdevice
 
 // WriteFlags holds options/flags passed into a write-like operation.
 type WriteFlags int8
