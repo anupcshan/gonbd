@@ -7,6 +7,8 @@ import (
 	"net"
 	"sync"
 	"testing"
+
+	"github.com/anupcshan/gonbd/blockdevice"
 )
 
 func expectRead(t *testing.T, c net.Conn, s interface{}) {
@@ -22,7 +24,7 @@ func expectRead(t *testing.T, c net.Conn, s interface{}) {
 	}
 
 	if !bytes.Equal(expected.Bytes(), actual) {
-		t.Errorf("Mismatch in bytes read:\nExpected: %v\nActual: %v", expected.Bytes(), actual)
+		t.Errorf("Mismatch in bytes read:\nExpected: %03v\nActual:   %03v", expected.Bytes(), actual)
 	}
 }
 
@@ -48,6 +50,7 @@ type operation struct {
 
 type testcase struct {
 	desc             string
+	exports          map[string]blockdevice.BlockDevice
 	ops              []operation
 	expectErr        bool
 	expectConnClosed bool
@@ -58,6 +61,7 @@ func runTest(t *testing.T, c testcase) {
 	serverConn, clientConn := netPipe()
 	sc := new(serverConnection)
 	sc.conn = serverConn
+	sc.exports = c.exports
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -100,11 +104,41 @@ func TestNegotiation(t *testing.T) {
 			ops: []operation{
 				{opRead, nbdFixedNewStyleHeader{NBDMAGIC, IHAVEOPT, FlagFixedNewStyle | FlagNoZeroes}},
 				{opWrite, nbdClientFlags(0)},
-				{opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptAbort, Length: 0}},
+				{opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptAbort}},
 				{opRead, nbdOptReply{REPLYMAGIC, OptAbort, RepAck, 0}},
 			},
 			expectConnClosed: true,
 			expectErr:        true,
+		},
+		{
+			desc: "Handle list with 0 exports",
+			ops: []operation{
+				{opRead, nbdFixedNewStyleHeader{NBDMAGIC, IHAVEOPT, FlagFixedNewStyle | FlagNoZeroes}},
+				{opWrite, nbdClientFlags(0)},
+				{opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptList}},
+				{opRead, nbdOptReply{REPLYMAGIC, OptList, RepAck, 0}},
+				{opClose, nil},
+			},
+			expectConnClosed: false,
+			expectErr:        true, // EOF
+		},
+		{
+			desc: "Handle list with 1 export",
+			exports: map[string]blockdevice.BlockDevice{
+				"foo": nil,
+			},
+			ops: []operation{
+				{opRead, nbdFixedNewStyleHeader{NBDMAGIC, IHAVEOPT, FlagFixedNewStyle | FlagNoZeroes}},
+				{opWrite, nbdClientFlags(0)},
+				{opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptList}},
+				{opRead, nbdOptReply{REPLYMAGIC, OptList, RepServer, 7}},
+				{opRead, uint32(3)},
+				{opRead, []byte("foo")},
+				{opRead, nbdOptReply{REPLYMAGIC, OptList, RepAck, 0}},
+				{opClose, nil},
+			},
+			expectConnClosed: false,
+			expectErr:        true, // EOF
 		},
 		{
 			desc: "Request export with a name too long",

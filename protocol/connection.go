@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sort"
 
 	"github.com/anupcshan/gonbd/blockdevice"
 )
@@ -50,11 +51,33 @@ func (c *serverConnection) negotiate() error {
 
 		switch clientOptions.Option {
 		case OptAbort:
-			if err := binary.Write(c.conn, binary.BigEndian, nbdOptReply{REPLYMAGIC, OptAbort, RepAck, 0}); err != nil {
+			if err := binary.Write(c.conn, binary.BigEndian, nbdOptReply{REPLYMAGIC, clientOptions.Option, RepAck, 0}); err != nil {
 				return fmt.Errorf("Error writing header: %w", err)
 			}
 			_ = c.conn.Close()
 			return fmt.Errorf("Connection aborted")
+
+		case OptList:
+			exportNames := make([]string, 0, len(c.exports))
+			for k := range c.exports {
+				exportNames = append(exportNames, k)
+			}
+			sort.Strings(exportNames)
+			for _, exportName := range exportNames {
+				if err := binary.Write(c.conn, binary.BigEndian, nbdOptReply{REPLYMAGIC, clientOptions.Option, RepServer, 4 + uint32(len(exportName))}); err != nil {
+					return fmt.Errorf("Error writing header: %w", err)
+				}
+				if err := binary.Write(c.conn, binary.BigEndian, uint32(len(exportName))); err != nil {
+					return fmt.Errorf("Error writing header: %w", err)
+				}
+				if _, err := c.conn.Write([]byte(exportName)); err != nil {
+					return fmt.Errorf("Error writing exportName: %w", err)
+				}
+			}
+			if err := binary.Write(c.conn, binary.BigEndian, nbdOptReply{REPLYMAGIC, clientOptions.Option, RepAck, 0}); err != nil {
+				return fmt.Errorf("Error writing header: %w", err)
+			}
+
 		case OptExportName:
 			if clientOptions.Length > maxSafeOptionLength {
 				_ = c.conn.Close()
