@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"net"
 	"sync"
@@ -11,10 +10,10 @@ import (
 	"github.com/anupcshan/gonbd/blockdevice"
 )
 
-func expectRead(t *testing.T, c net.Conn, s interface{}) {
+func expectRead(t *testing.T, c net.Conn, s []byte) {
 	t.Helper()
 	expected := new(bytes.Buffer)
-	if err := binary.Write(expected, binary.BigEndian, s); err != nil {
+	if _, err := expected.Write(s); err != nil {
 		t.Fatal(err)
 	}
 
@@ -28,9 +27,9 @@ func expectRead(t *testing.T, c net.Conn, s interface{}) {
 	}
 }
 
-func expectWrite(t *testing.T, c net.Conn, s interface{}) {
+func expectWrite(t *testing.T, c net.Conn, s []byte) {
 	t.Helper()
-	if err := binary.Write(c, binary.BigEndian, s); err != nil {
+	if _, err := c.Write(s); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -45,7 +44,7 @@ const (
 
 type operation struct {
 	code opcode
-	data interface{}
+	data []byte
 }
 
 type testcase struct {
@@ -97,15 +96,60 @@ func runTest(t *testing.T, c testcase) {
 	wg.Wait()
 }
 
+// nbdFixedNewStyleHeader{NBDMAGIC, IHAVEOPT, FlagFixedNewStyle | FlagNoZeroes}
+var fixedNewStyleHeader = []byte{
+	// NBDMAGIC
+	0x4e, 0x42, 0x44, 0x4d, 0x41, 0x47, 0x49, 0x43,
+	// IHAVEOPT
+	0x49, 0x48, 0x41, 0x56, 0x45, 0x4f, 0x50, 0x54,
+	// FlagFixedNewStyle | FlagNoZeroes
+	0x00, 0x03,
+}
+
+// nbdClientFlags(FlagClientFixedNewStyle | FlagClientNoZeroes)
+var fixedNewStyleClientHeader = []byte{
+	0x00, 0x00, 0x00, 0x03,
+}
+
 func TestNegotiation(t *testing.T) {
 	for _, c := range []testcase{
 		{
+			desc: "Don't fail on missing NBD_FLAG_C_FIXED_NEWSTYLE",
+			ops: []operation{
+				{opRead, fixedNewStyleHeader},
+				// nbdClientFlags(0)
+				{opWrite, []byte{0x00, 0x00, 0x00, 0x00}},
+				{opClose, nil},
+			},
+			// Server shouldn't have closed connection.
+			expectConnClosed: false,
+			expectErr:        true, // EOF
+		},
+		{
 			desc: "Handle abort",
 			ops: []operation{
-				{opRead, nbdFixedNewStyleHeader{NBDMAGIC, IHAVEOPT, FlagFixedNewStyle | FlagNoZeroes}},
-				{opWrite, nbdClientFlags(0)},
-				{opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptAbort}},
-				{opRead, nbdOptReply{REPLYMAGIC, OptAbort, RepAck, 0}},
+				{opRead, fixedNewStyleHeader},
+				{opWrite, fixedNewStyleClientHeader},
+				// {opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptAbort}},
+				{opWrite, []byte{
+					// IHAVEOPT
+					0x49, 0x48, 0x41, 0x56, 0x45, 0x4f, 0x50, 0x54,
+					// OptAbort
+					0x00, 0x00, 0x00, 0x02,
+					// Length
+					0x00, 0x00, 0x00, 0x00,
+				}},
+				// nbdOptReply{REPLYMAGIC, OptAbort, RepAck, 0}
+				{opRead, []byte{
+					// REPLYMAGIC
+					0x00, 0x03, 0xe8, 0x89, 0x04, 0x55, 0x65, 0xa9,
+					// OptAbort
+					0x00, 0x00, 0x00, 0x02,
+					// RepAck
+					0x00, 0x00, 0x00, 0x01,
+					// Length
+					0x00, 0x00, 0x00, 0x00,
+				}},
 			},
 			expectConnClosed: true,
 			expectErr:        true,
@@ -113,10 +157,28 @@ func TestNegotiation(t *testing.T) {
 		{
 			desc: "Handle list with 0 exports",
 			ops: []operation{
-				{opRead, nbdFixedNewStyleHeader{NBDMAGIC, IHAVEOPT, FlagFixedNewStyle | FlagNoZeroes}},
-				{opWrite, nbdClientFlags(0)},
-				{opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptList}},
-				{opRead, nbdOptReply{REPLYMAGIC, OptList, RepAck, 0}},
+				{opRead, fixedNewStyleHeader},
+				{opWrite, fixedNewStyleClientHeader},
+				// nbdClientOptions{OptMagic: IHAVEOPT, Option: OptList}
+				{opWrite, []byte{
+					// IHAVEOPT
+					0x49, 0x48, 0x41, 0x56, 0x45, 0x4f, 0x50, 0x54,
+					// OptList
+					0x00, 0x00, 0x00, 0x03,
+					// Length
+					0x00, 0x00, 0x00, 0x00,
+				}},
+				// nbdOptReply{REPLYMAGIC, OptList, RepAck, 0}
+				{opRead, []byte{
+					// REPLYMAGIC
+					0x00, 0x03, 0xe8, 0x89, 0x04, 0x55, 0x65, 0xa9,
+					// OptList
+					0x00, 0x00, 0x00, 0x03,
+					// RepAck
+					0x00, 0x00, 0x00, 0x01,
+					// Length
+					0x00, 0x00, 0x00, 0x00,
+				}},
 				{opClose, nil},
 			},
 			expectConnClosed: false,
@@ -128,13 +190,43 @@ func TestNegotiation(t *testing.T) {
 				"foo": nil,
 			},
 			ops: []operation{
-				{opRead, nbdFixedNewStyleHeader{NBDMAGIC, IHAVEOPT, FlagFixedNewStyle | FlagNoZeroes}},
-				{opWrite, nbdClientFlags(0)},
-				{opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptList}},
-				{opRead, nbdOptReply{REPLYMAGIC, OptList, RepServer, 7}},
-				{opRead, uint32(3)},
-				{opRead, []byte("foo")},
-				{opRead, nbdOptReply{REPLYMAGIC, OptList, RepAck, 0}},
+				{opRead, fixedNewStyleHeader},
+				{opWrite, fixedNewStyleClientHeader},
+				// nbdClientOptions{OptMagic: IHAVEOPT, Option: OptList}
+				{opWrite, []byte{
+					// IHAVEOPT
+					0x49, 0x48, 0x41, 0x56, 0x45, 0x4f, 0x50, 0x54,
+					// OptList
+					0x00, 0x00, 0x00, 0x03,
+					// Length
+					0x00, 0x00, 0x00, 0x00,
+				}},
+				// nbdOptReply{REPLYMAGIC, OptList, RepServer, 7}
+				{opRead, []byte{
+					// REPLYMAGIC
+					0x00, 0x03, 0xe8, 0x89, 0x04, 0x55, 0x65, 0xa9,
+					// OptList
+					0x00, 0x00, 0x00, 0x03,
+					// RepServer
+					0x00, 0x00, 0x00, 0x02,
+					// Length
+					0x00, 0x00, 0x00, 0x07,
+				}},
+				// uint32(3)
+				{opRead, []byte{0x00, 0x00, 0x00, 0x03}},
+				// "foo"
+				{opRead, []byte{0x66, 0x6f, 0x6f}},
+				// nbdOptReply{REPLYMAGIC, OptList, RepAck, 0}
+				{opRead, []byte{
+					// REPLYMAGIC
+					0x00, 0x03, 0xe8, 0x89, 0x04, 0x55, 0x65, 0xa9,
+					// OptList
+					0x00, 0x00, 0x00, 0x03,
+					// RepAck
+					0x00, 0x00, 0x00, 0x01,
+					// Length
+					0x00, 0x00, 0x00, 0x00,
+				}},
 				{opClose, nil},
 			},
 			expectConnClosed: false,
@@ -143,9 +235,17 @@ func TestNegotiation(t *testing.T) {
 		{
 			desc: "Request export with a name too long",
 			ops: []operation{
-				{opRead, nbdFixedNewStyleHeader{NBDMAGIC, IHAVEOPT, FlagFixedNewStyle | FlagNoZeroes}},
-				{opWrite, nbdClientFlags(0)},
-				{opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptExportName, Length: maxSafeOptionLength + 1}},
+				{opRead, fixedNewStyleHeader},
+				{opWrite, fixedNewStyleClientHeader},
+				// nbdClientOptions{OptMagic: IHAVEOPT, Option: OptExportName, Length: maxSafeOptionLength + 1}
+				{opWrite, []byte{
+					// IHAVEOPT
+					0x49, 0x48, 0x41, 0x56, 0x45, 0x4f, 0x50, 0x54,
+					// OptExportName
+					0x00, 0x00, 0x00, 0x01,
+					// maxSafeOptionLength + 1 = 4097
+					0x00, 0x00, 0x10, 0x01,
+				}},
 			},
 			expectConnClosed: true,
 			expectErr:        true,
@@ -153,10 +253,19 @@ func TestNegotiation(t *testing.T) {
 		{
 			desc: "Unknown export",
 			ops: []operation{
-				{opRead, nbdFixedNewStyleHeader{NBDMAGIC, IHAVEOPT, FlagFixedNewStyle | FlagNoZeroes}},
-				{opWrite, nbdClientFlags(0)},
-				{opWrite, nbdClientOptions{OptMagic: IHAVEOPT, Option: OptExportName, Length: 3}},
-				{opWrite, []byte("foo")},
+				{opRead, fixedNewStyleHeader},
+				{opWrite, fixedNewStyleClientHeader},
+				// nbdClientOptions{OptMagic: IHAVEOPT, Option: OptExportName, Length: 3}
+				{opWrite, []byte{
+					// IHAVEOPT
+					0x49, 0x48, 0x41, 0x56, 0x45, 0x4f, 0x50, 0x54,
+					// OptExportName
+					0x00, 0x00, 0x00, 0x01,
+					// Length = 3
+					0x00, 0x00, 0x00, 0x03,
+				}},
+				// "foo"
+				{opWrite, []byte{0x66, 0x6f, 0x6f}},
 			},
 			expectConnClosed: true,
 			expectErr:        true,
