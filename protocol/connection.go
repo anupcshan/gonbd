@@ -50,6 +50,24 @@ func (c *serverConnection) negotiate() error {
 		}
 
 		switch clientOptions.Option {
+		case OptExportName:
+			if clientOptions.Length > maxSafeOptionLength {
+				_ = c.conn.Close()
+				return fmt.Errorf("Option length too long: %d > %d", clientOptions.Length, maxSafeOptionLength)
+			}
+			exportName := make([]byte, clientOptions.Length)
+			if _, err := io.ReadFull(c.conn, exportName); err != nil {
+				_ = c.conn.Close()
+				return fmt.Errorf("Error reading export name: %w", err)
+			}
+
+			export, ok := c.exports[string(exportName)]
+			if !ok {
+				_ = c.conn.Close()
+				return fmt.Errorf("Unknown export %s", exportName)
+			}
+			return fmt.Errorf("TODO: successful export name not implemented %v", export)
+
 		case OptAbort:
 			if err := binary.Write(c.conn, binary.BigEndian, nbdOptReply{REPLYMAGIC, clientOptions.Option, RepAck, 0}); err != nil {
 				return fmt.Errorf("Error writing header: %w", err)
@@ -77,24 +95,6 @@ func (c *serverConnection) negotiate() error {
 			if err := binary.Write(c.conn, binary.BigEndian, nbdOptReply{REPLYMAGIC, clientOptions.Option, RepAck, 0}); err != nil {
 				return fmt.Errorf("Error writing header: %w", err)
 			}
-
-		case OptExportName:
-			if clientOptions.Length > maxSafeOptionLength {
-				_ = c.conn.Close()
-				return fmt.Errorf("Option length too long: %d > %d", clientOptions.Length, maxSafeOptionLength)
-			}
-			exportName := make([]byte, clientOptions.Length)
-			if _, err := io.ReadFull(c.conn, exportName); err != nil {
-				_ = c.conn.Close()
-				return fmt.Errorf("Error reading export name: %w", err)
-			}
-
-			export, ok := c.exports[string(exportName)]
-			if !ok {
-				_ = c.conn.Close()
-				return fmt.Errorf("Unknown export %s", exportName)
-			}
-			return fmt.Errorf("TODO: successful export name not implemented %v", export)
 		}
 	}
 }
