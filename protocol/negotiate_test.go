@@ -58,8 +58,7 @@ type testcase struct {
 func runTest(t *testing.T, c testcase) {
 	t.Logf("Running case: %s", c.desc)
 	serverConn, clientConn := netPipe()
-	sc := new(serverConnection)
-	sc.conn = serverConn
+	sc := new(nbdServer)
 	sc.exports = c.exports
 
 	var wg sync.WaitGroup
@@ -80,7 +79,7 @@ func runTest(t *testing.T, c testcase) {
 		}
 	}()
 
-	err := sc.negotiate()
+	_, err := sc.negotiate(serverConn)
 	if c.expectErr && err == nil {
 		t.Error("Expected error during negotiation but got no error")
 	} else if !c.expectErr && err != nil {
