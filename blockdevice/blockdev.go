@@ -7,7 +7,7 @@ const (
 	requestFUA WriteFlags = 1 << iota
 )
 
-// FUA indicates if this write-like operation requested FUA.
+// FUA indicates if this write-like operation requested FUA (force unit access).
 func (wo WriteFlags) FUA() bool {
 	return wo&requestFUA != 0
 }
@@ -30,7 +30,7 @@ type BlockDevice interface {
 	WriteAt(p []byte, offset uint64, opts WriteFlags) (uint64, error)
 	ReadAt(p []byte, offset uint64) (uint64, error)
 	Features() BlockDeviceFeatures
-	Size() uint64
+	Size() (uint64, error)
 
 	// Optional:
 	// BlockDeviceFlusher
