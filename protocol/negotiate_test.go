@@ -58,8 +58,8 @@ type testcase struct {
 func runTest(t *testing.T, c testcase) {
 	t.Logf("Running case: %s", c.desc)
 	serverConn, clientConn := netPipe()
-	sc := new(nbdServer)
-	sc.exports = c.exports
+	sc := new(NbdServer)
+	sc.Exports = c.exports
 
 	var wg sync.WaitGroup
 	wg.Add(1)

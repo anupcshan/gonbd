@@ -14,14 +14,15 @@ import (
 
 const maxSafeOptionLength = 4096
 
-type nbdServer struct {
-	exports map[string]blockdevice.BlockDevice
+type NbdServer struct {
+	Exports map[string]blockdevice.BlockDevice
 }
 
-func (c *nbdServer) Serve(ctx context.Context, l net.Listener) error {
+func (c *NbdServer) Serve(ctx context.Context, l net.Listener) error {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
+			log.Println(err)
 			return err
 		}
 
@@ -33,21 +34,24 @@ type connParams struct {
 	export blockdevice.BlockDevice
 }
 
-func (c *nbdServer) handleConnection(conn net.Conn) error {
+func (c *NbdServer) handleConnection(conn net.Conn) error {
 	params, err := c.negotiate(conn)
 	if err != nil {
+		log.Println(err)
 		return err
 	}
 
 	return c.handleTransmission(params, conn)
 }
 
-func (c *nbdServer) handleTransmission(params *connParams, conn net.Conn) error {
-	panic("Not implemented")
+func (c *NbdServer) handleTransmission(params *connParams, conn net.Conn) error {
+	conn.Close()
+	log.Println("handleTransmission not implemented. Closing connection.")
+	return fmt.Errorf("Not implemented")
 }
 
 // https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md#fixed-newstyle-negotiation
-func (c *nbdServer) negotiate(conn net.Conn) (*connParams, error) {
+func (c *NbdServer) negotiate(conn net.Conn) (*connParams, error) {
 	header := nbdFixedNewStyleHeader{
 		NBDMAGIC,
 		IHAVEOPT,
@@ -89,7 +93,7 @@ func (c *nbdServer) negotiate(conn net.Conn) (*connParams, error) {
 				return nil, fmt.Errorf("Error reading export name: %w", err)
 			}
 
-			export, ok := c.exports[string(exportName)]
+			export, ok := c.Exports[string(exportName)]
 			if !ok {
 				_ = conn.Close()
 				return nil, fmt.Errorf("Unknown export %s", exportName)
@@ -106,8 +110,8 @@ func (c *nbdServer) negotiate(conn net.Conn) (*connParams, error) {
 			return nil, fmt.Errorf("Connection aborted")
 
 		case OptList:
-			exportNames := make([]string, 0, len(c.exports))
-			for k := range c.exports {
+			exportNames := make([]string, 0, len(c.Exports))
+			for k := range c.Exports {
 				exportNames = append(exportNames, k)
 			}
 			sort.Strings(exportNames)
@@ -125,6 +129,9 @@ func (c *nbdServer) negotiate(conn net.Conn) (*connParams, error) {
 			if err := binary.Write(conn, binary.BigEndian, nbdOptReply{REPLYMAGIC, clientOptions.Option, RepAck, 0}); err != nil {
 				return nil, fmt.Errorf("Error writing header: %w", err)
 			}
+		default:
+			_ = conn.Close()
+			return nil, fmt.Errorf("Unknown option type %v", clientOptions.Option)
 		}
 	}
 }
